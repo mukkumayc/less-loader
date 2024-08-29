@@ -88,5 +88,8 @@
     "less.js",
     "css",
     "preprocessor"
-  ]
+  ],
+  "dependencies": {
+    "chalk": "^2.3.0"
+  }
 }

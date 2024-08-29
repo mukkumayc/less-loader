@@ -1,4 +1,8 @@
-import path from "path";
+import path from 'path';
+
+import os from 'os';
+
+import chalk from 'chalk';
 
 /* eslint-disable class-methods-use-this */
 const trailingSlash = /[/\\]$/;
@@ -18,8 +22,7 @@ const IS_NATIVE_WIN32_PATH = /^[a-z]:[/\\]|^\\\\/i;
 // - ~@org/
 // - ~@org/package
 // - ~@org/package/
-const IS_MODULE_IMPORT =
-  /^~([^/]+|[^/]+\/|@[^/]+[/][^/]+|@[^/]+\/?|@[^/]+[/][^/]+\/)$/;
+const IS_MODULE_IMPORT = /^~([^/]+|[^/]+\/|@[^/]+[/][^/]+|@[^/]+\/?|@[^/]+[/][^/]+\/)$/;
 const MODULE_REQUEST_REGEX = /^[^?]*~/;
 
 /**
@@ -27,130 +30,168 @@ const MODULE_REQUEST_REGEX = /^[^?]*~/;
  *
  * @param {LoaderContext} loaderContext
  * @param {object} implementation
+ * @param {string[]} appSources
  * @returns {LessPlugin}
  */
-function createWebpackLessPlugin(loaderContext, implementation) {
-  const resolve = loaderContext.getResolve({
-    dependencyType: "less",
-    conditionNames: ["less", "style", "..."],
-    mainFields: ["less", "style", "main", "..."],
-    mainFiles: ["index", "..."],
-    extensions: [".less", ".css"],
-    preferRelative: true,
-  });
+function createWebpackLessPlugin(loaderContext, implementation, appSources) {
+	const resolve = loaderContext.getResolve({
+		dependencyType: 'less',
+		conditionNames: ['less', 'style', '...'],
+		mainFields: ['less', 'style', 'main', '...'],
+		mainFiles: ['index', '...'],
+		extensions: ['.less', '.css'],
+		preferRelative: true,
+	});
 
-  class WebpackFileManager extends implementation.FileManager {
-    supports(filename) {
-      if (filename[0] === "/" || IS_NATIVE_WIN32_PATH.test(filename)) {
-        return true;
-      }
+	class WebpackFileManager extends implementation.FileManager {
+		supports(filename) {
+			if (filename[0] === '/' || IS_NATIVE_WIN32_PATH.test(filename)) {
+				return true;
+			}
 
-      if (this.isPathAbsolute(filename)) {
-        return false;
-      }
+			if (this.isPathAbsolute(filename)) {
+				return false;
+			}
 
-      return true;
-    }
+			return true;
+		}
 
-    // Sync resolving is used at least by the `data-uri` function.
-    // This file manager doesn't know how to do it, so let's delegate it
-    // to the default file manager of Less.
-    // We could probably use loaderContext.resolveSync, but it's deprecated,
-    // see https://webpack.js.org/api/loaders/#this-resolvesync
-    supportsSync() {
-      return false;
-    }
+		// Sync resolving is used at least by the `data-uri` function.
+		// This file manager doesn't know how to do it, so let's delegate it
+		// to the default file manager of Less.
+		// We could probably use loaderContext.resolveSync, but it's deprecated,
+		// see https://webpack.js.org/api/loaders/#this-resolvesync
+		supportsSync() {
+			return false;
+		}
 
-    async resolveFilename(filename, currentDirectory) {
-      // Less is giving us trailing slashes, but the context should have no trailing slash
-      const context = currentDirectory.replace(trailingSlash, "");
+		async resolveFilename(filename, currentDirectory) {
+			// Less is giving us trailing slashes, but the context should have no trailing slash
+			const context = currentDirectory.replace(trailingSlash, '');
 
-      let request = filename;
+			let request = filename;
 
-      // A `~` makes the url an module
-      if (MODULE_REQUEST_REGEX.test(filename)) {
-        request = request.replace(MODULE_REQUEST_REGEX, "");
-      }
+			// A `~` makes the url an module
+			if (MODULE_REQUEST_REGEX.test(filename)) {
+				request = request.replace(MODULE_REQUEST_REGEX, '');
+			}
 
-      if (IS_MODULE_IMPORT.test(filename)) {
-        request = request[request.length - 1] === "/" ? request : `${request}/`;
-      }
+			if (IS_MODULE_IMPORT.test(filename)) {
+				request = request[request.length - 1] === '/' ? request : `${request}/`;
+			}
 
-      return this.resolveRequests(context, [...new Set([request, filename])]);
-    }
+			return this.resolveRequests(context, [...new Set([request, filename])]);
+		}
 
-    async resolveRequests(context, possibleRequests) {
-      if (possibleRequests.length === 0) {
-        return Promise.reject();
-      }
+		async resolveRequests(context, possibleRequests) {
+			if (possibleRequests.length === 0) {
+				return Promise.reject();
+			}
 
-      let result;
+			let result;
 
-      try {
-        result = await resolve(context, possibleRequests[0]);
-      } catch (error) {
-        const [, ...tailPossibleRequests] = possibleRequests;
+			try {
+				result = await resolve(context, possibleRequests[0]);
+			} catch (error) {
+				const [, ...tailPossibleRequests] = possibleRequests;
 
-        if (tailPossibleRequests.length === 0) {
-          throw error;
-        }
+				if (tailPossibleRequests.length === 0) {
+					throw error;
+				}
 
-        result = await this.resolveRequests(context, tailPossibleRequests);
-      }
+				result = await this.resolveRequests(context, tailPossibleRequests);
+			}
 
-      return result;
-    }
+			return result;
+		}
 
-    async loadFile(filename, ...args) {
-      let result;
+		emitOutOfScopeError(filename) {
+			const scopeError = new Error(
+				`You attempted to import ${chalk.cyan(filename)} which falls outside of the project ${chalk.cyan('src/')} directory. ` +
+					`Relative imports outside of ${chalk.cyan('src/')} are not supported.${os.EOL}You can either move it inside ${chalk.cyan(
+						'src/',
+					)}, or add a symlink to it from project's ${chalk.cyan('node_modules/')}.`,
+			);
 
-      try {
-        if (IS_SPECIAL_MODULE_IMPORT.test(filename)) {
-          const error = new Error();
+			loaderContext.emitError(scopeError);
+		}
 
-          error.type = "Next";
+		isFileInAllowedDirectory(filename, currentDirectory) {
+			if (!appSources) {
+				return true;
+			}
 
-          throw error;
-        }
+			if (
+				appSources.every((appSource) => {
+					const relative = path.relative(appSource, currentDirectory);
+					return relative.startsWith('../') || relative.startsWith('..\\');
+				})
+			) {
+				// If it's not in one of our app src or a subdirectory, not our request!
+				return true;
+			}
 
-        result = await super.loadFile(filename, ...args);
-      } catch (error) {
-        if (error.type !== "File" && error.type !== "Next") {
-          return Promise.reject(error);
-        }
+			const requestFullPath = path.resolve(currentDirectory, filename);
 
-        try {
-          result = await this.resolveFilename(filename, ...args);
-        } catch (webpackResolveError) {
-          error.message =
-            `Less resolver error:\n${error.message}\n\n` +
-            `Webpack resolver error details:\n${webpackResolveError.details}\n\n` +
-            `Webpack resolver error missing:\n${webpackResolveError.missing}\n\n`;
+			return !appSources.every((appSource) => {
+				const requestRelative = path.relative(appSource, requestFullPath);
+				return requestRelative.startsWith('../') || requestRelative.startsWith('..\\');
+			});
+		}
 
-          return Promise.reject(error);
-        }
+		async loadFile(filename, ...args) {
+			let result;
+			const [currentDirectory] = args;
 
-        loaderContext.addDependency(result);
+			if (!this.isFileInAllowedDirectory(filename, currentDirectory)) {
+				this.emitOutOfScopeError(filename);
+			}
 
-        return super.loadFile(result, ...args);
-      }
+			try {
+				if (IS_SPECIAL_MODULE_IMPORT.test(filename)) {
+					const error = new Error();
 
-      const absoluteFilename = path.isAbsolute(result.filename)
-        ? result.filename
-        : path.resolve(".", result.filename);
+					error.type = 'Next';
 
-      loaderContext.addDependency(path.normalize(absoluteFilename));
+					throw error;
+				}
 
-      return result;
-    }
-  }
+				result = await super.loadFile(filename, ...args);
+			} catch (error) {
+				if (error.type !== 'File' && error.type !== 'Next') {
+					return Promise.reject(error);
+				}
 
-  return {
-    install(lessInstance, pluginManager) {
-      pluginManager.addFileManager(new WebpackFileManager());
-    },
-    minVersion: [3, 0, 0],
-  };
+				try {
+					result = await this.resolveFilename(filename, ...args);
+				} catch (webpackResolveError) {
+					error.message =
+						`Less resolver error:\n${error.message}\n\n` +
+						`Webpack resolver error details:\n${webpackResolveError.details}\n\n` +
+						`Webpack resolver error missing:\n${webpackResolveError.missing}\n\n`;
+
+					return Promise.reject(error);
+				}
+
+				loaderContext.addDependency(result);
+
+				return super.loadFile(result, ...args);
+			}
+
+			const absoluteFilename = path.isAbsolute(result.filename) ? result.filename : path.resolve('.', result.filename);
+
+			loaderContext.addDependency(path.normalize(absoluteFilename));
+
+			return result;
+		}
+	}
+
+	return {
+		install(lessInstance, pluginManager) {
+			pluginManager.addFileManager(new WebpackFileManager());
+		},
+		minVersion: [3, 0, 0],
+	};
 }
 
 /**
@@ -162,126 +203,110 @@ function createWebpackLessPlugin(loaderContext, implementation) {
  * @returns {Object}
  */
 function getLessOptions(loaderContext, loaderOptions, implementation) {
-  const options =
-    typeof loaderOptions.lessOptions === "function"
-      ? loaderOptions.lessOptions(loaderContext) || {}
-      : loaderOptions.lessOptions || {};
+	const options = typeof loaderOptions.lessOptions === 'function' ? loaderOptions.lessOptions(loaderContext) || {} : loaderOptions.lessOptions || {};
 
-  const lessOptions = {
-    plugins: [],
-    relativeUrls: true,
-    // We need to set the filename because otherwise our WebpackFileManager will receive an undefined path for the entry
-    filename: loaderContext.resourcePath,
-    ...options,
-  };
+	const lessOptions = {
+		plugins: [],
+		relativeUrls: true,
+		// We need to set the filename because otherwise our WebpackFileManager will receive an undefined path for the entry
+		filename: loaderContext.resourcePath,
+		...options,
+	};
 
-  const plugins = lessOptions.plugins.slice();
-  const shouldUseWebpackImporter =
-    typeof loaderOptions.webpackImporter === "boolean"
-      ? loaderOptions.webpackImporter
-      : true;
+	const plugins = lessOptions.plugins.slice();
+	const shouldUseWebpackImporter = typeof loaderOptions.webpackImporter === 'boolean' ? loaderOptions.webpackImporter : true;
 
-  if (shouldUseWebpackImporter) {
-    plugins.unshift(createWebpackLessPlugin(loaderContext, implementation));
-  }
+	if (shouldUseWebpackImporter) {
+		plugins.unshift(createWebpackLessPlugin(loaderContext, implementation, loaderOptions.appSources));
+	}
 
-  plugins.unshift({
-    install(lessProcessor, pluginManager) {
-      // eslint-disable-next-line no-param-reassign
-      pluginManager.webpackLoaderContext = loaderContext;
+	plugins.unshift({
+		install(lessProcessor, pluginManager) {
+			// eslint-disable-next-line no-param-reassign
+			pluginManager.webpackLoaderContext = loaderContext;
 
-      lessOptions.pluginManager = pluginManager;
-    },
-  });
+			lessOptions.pluginManager = pluginManager;
+		},
+	});
 
-  lessOptions.plugins = plugins;
+	lessOptions.plugins = plugins;
 
-  return lessOptions;
+	return lessOptions;
 }
 
 function isUnsupportedUrl(url) {
-  // Is Windows path
-  if (IS_NATIVE_WIN32_PATH.test(url)) {
-    return false;
-  }
+	// Is Windows path
+	if (IS_NATIVE_WIN32_PATH.test(url)) {
+		return false;
+	}
 
-  // Scheme: https://tools.ietf.org/html/rfc3986#section-3.1
-  // Absolute URL: https://tools.ietf.org/html/rfc3986#section-4.3
-  return /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(url);
+	// Scheme: https://tools.ietf.org/html/rfc3986#section-3.1
+	// Absolute URL: https://tools.ietf.org/html/rfc3986#section-4.3
+	return /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(url);
 }
 
 function normalizeSourceMap(map) {
-  const newMap = map;
+	const newMap = map;
 
-  // map.file is an optional property that provides the output filename.
-  // Since we don't know the final filename in the webpack build chain yet, it makes no sense to have it.
-  // eslint-disable-next-line no-param-reassign
-  delete newMap.file;
+	// map.file is an optional property that provides the output filename.
+	// Since we don't know the final filename in the webpack build chain yet, it makes no sense to have it.
+	// eslint-disable-next-line no-param-reassign
+	delete newMap.file;
 
-  // eslint-disable-next-line no-param-reassign
-  newMap.sourceRoot = "";
+	// eslint-disable-next-line no-param-reassign
+	newMap.sourceRoot = '';
 
-  // `less` returns POSIX paths, that's why we need to transform them back to native paths.
-  // eslint-disable-next-line no-param-reassign
-  newMap.sources = newMap.sources.map((source) => path.normalize(source));
+	// `less` returns POSIX paths, that's why we need to transform them back to native paths.
+	// eslint-disable-next-line no-param-reassign
+	newMap.sources = newMap.sources.map((source) => path.normalize(source));
 
-  return newMap;
+	return newMap;
 }
 
 function getLessImplementation(loaderContext, implementation) {
-  let resolvedImplementation = implementation;
+	let resolvedImplementation = implementation;
 
-  if (!implementation || typeof implementation === "string") {
-    const lessImplPkg = implementation || "less";
+	if (!implementation || typeof implementation === 'string') {
+		const lessImplPkg = implementation || 'less';
 
-    // eslint-disable-next-line import/no-dynamic-require, global-require
-    resolvedImplementation = require(lessImplPkg);
-  }
+		// eslint-disable-next-line import/no-dynamic-require, global-require
+		resolvedImplementation = require(lessImplPkg);
+	}
 
-  // eslint-disable-next-line consistent-return
-  return resolvedImplementation;
+	// eslint-disable-next-line consistent-return
+	return resolvedImplementation;
 }
 
 function getFileExcerptIfPossible(error) {
-  if (typeof error.extract === "undefined") {
-    return [];
-  }
+	if (typeof error.extract === 'undefined') {
+		return [];
+	}
 
-  const excerpt = error.extract.slice(0, 2);
-  const column = Math.max(error.column - 1, 0);
+	const excerpt = error.extract.slice(0, 2);
+	const column = Math.max(error.column - 1, 0);
 
-  if (typeof excerpt[0] === "undefined") {
-    excerpt.shift();
-  }
+	if (typeof excerpt[0] === 'undefined') {
+		excerpt.shift();
+	}
 
-  excerpt.push(`${new Array(column).join(" ")}^`);
+	excerpt.push(`${new Array(column).join(' ')}^`);
 
-  return excerpt;
+	return excerpt;
 }
 
 function errorFactory(error) {
-  const message = [
-    "\n",
-    ...getFileExcerptIfPossible(error),
-    error.message.charAt(0).toUpperCase() + error.message.slice(1),
-    error.filename
-      ? `      Error in ${path.normalize(error.filename)} (line ${
-          error.line
-        }, column ${error.column})`
-      : "",
-  ].join("\n");
+	const message = [
+		'\n',
+		...getFileExcerptIfPossible(error),
+		error.message.charAt(0).toUpperCase() + error.message.slice(1),
+		error.filename ? `      Error in ${path.normalize(error.filename)} (line ${error.line}, column ${error.column})` : '',
+	].join('\n');
 
-  const obj = new Error(message, { cause: error });
+	const obj = new Error(message, {cause: error});
 
-  obj.stack = null;
+	obj.stack = null;
 
-  return obj;
+	return obj;
 }
 
-export {
-  getLessOptions,
-  isUnsupportedUrl,
-  normalizeSourceMap,
-  getLessImplementation,
-  errorFactory,
-};
+export {getLessOptions, isUnsupportedUrl, normalizeSourceMap, getLessImplementation, errorFactory};
