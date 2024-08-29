@@ -133,6 +133,14 @@ function createWebpackLessPlugin(loaderContext, implementation, appSources) {
 
 			const requestFullPath = path.resolve(currentDirectory, filename);
 
+			if (
+				// If this resolves to a node_module, we don't care what happens next
+				requestFullPath.indexOf('/node_modules/') !== -1 ||
+				requestFullPath.indexOf('\\node_modules\\') !== -1
+			) {
+				return true;
+			}
+
 			return !appSources.every((appSource) => {
 				const requestRelative = path.relative(appSource, requestFullPath);
 				return requestRelative.startsWith('../') || requestRelative.startsWith('..\\');
