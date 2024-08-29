@@ -1,9 +1,9 @@
 {
-  "name": "less-loader",
+  "name": "@sk9078/less-loader",
   "version": "12.2.0",
   "description": "A Less loader for webpack. Compiles Less to CSS.",
   "license": "MIT",
-  "repository": "webpack-contrib/less-loader",
+  "repository": "mukkumayc/less-loader",
   "author": "Johannes Ewald @jhnns",
   "homepage": "https://github.com/webpack-contrib/less-loader",
   "bugs": "https://github.com/webpack-contrib/less-loader/issues",
